@@ -44,8 +44,9 @@ class ConvNet(nn.Module):
         # Layer 3: Input size = 450, 450 neurons
         self.dense2 = nn.Linear(450, 450)
 
-        # Layer 4: Output layer
-        self.output = nn.Linear(450, 5)
+        # Output layers
+        self.class_out = nn.Linear(450, num_classes)
+        self.bbox_out = nn.Linear(450, 4)
 
     # Use Dropout now.
     def forward(self, X):
@@ -83,5 +84,9 @@ class ConvNet(nn.Module):
         X = self.dense2(X)
         X = F.relu(X)
 
+        # Get class and bbox outputs
+        class_X = self.class_out(X)
+        bbox_X = self.bbox_out(X)
+
         # Output layer
-        return self.output(X)
+        return class_X, bbox_X

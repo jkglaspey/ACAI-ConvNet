@@ -6,6 +6,7 @@ import time
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
+import shutil
 from PIL import Image, ImageDraw
 from sklearn.metrics import confusion_matrix
 import torch
@@ -14,6 +15,7 @@ import torch.nn.functional as F
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 from torch.utils.tensorboard import SummaryWriter
+from torchmetrics import MeanMetric
 import torchvision.transforms.functional as TF
 from torchvision import datasets, transforms
 from torchvision import transforms as T
@@ -30,37 +32,39 @@ from ConvNet import ConvNet
 
 class CustomDataset(Dataset):
     def __init__(self, images_dir, labels_dir, transform=None):
+        super(CustomDataset, self).__init__()
         self.images_dir = images_dir
         self.labels_dir = labels_dir
         self.image_files = os.listdir(images_dir)
         self.transform = transform
 
     def __len__(self):
+        """Return the total number of samples in the dataset"""
         return len(self.image_files)
-
+        
     def __getitem__(self, idx):
         img_path = os.path.join(self.images_dir, self.image_files[idx])
         label_path = os.path.join(self.labels_dir, self.image_files[idx].replace('.jpg', '.txt'))
-
+        
         image = Image.open(img_path).convert("RGB")
+        
+        # Read YOLO format labels (class_id, x_center, y_center, width, height)
         with open(label_path, 'r') as f:
             labels = f.readlines()
-
-        # Process labels to get a single target class
-        if labels:  # Check if there are any labels
-            # Assume the format is <class_id> <x_center> <y_center> <width> <height>
-            class_id, _, _, _, _ = map(float, labels[0].strip().split())
-            target = class_id  # Use only the first class ID
-        else:
-            target = 0  # Default or placeholder class ID if no labels are found
-
-        # Convert target to tensor
-        target_tensor = torch.tensor(int(target), dtype=torch.long)  # Make sure it's long type for CrossEntropyLoss
-
+        
+        # Initialize targets
+        class_target = torch.zeros(1, dtype=torch.long)
+        bbox_target = torch.zeros(4, dtype=torch.float)
+        
+        if labels:
+            parts = list(map(float, labels[0].strip().split()))
+            class_target[0] = int(parts[0])
+            bbox_target = torch.tensor(parts[1:], dtype=torch.float)
+        
         if self.transform:
             image = self.transform(image)
-
-        return image, target_tensor
+            
+        return image, (class_target, bbox_target)
     
 
 # -------------------------------------------------------------------------
@@ -82,30 +86,37 @@ def train(model, device, train_loader, optimizer, criterion, epoch, batch_size, 
     # Set model to train mode before each epoch
     model.train()
     
-    # Empty list to store losses 
+    # Empty lists to store losses 
     losses = []
-    correct = 0
+    cls_correct = 0
+    bbox_losses = []
 
     # Reset metrics at the start of each epoch
     metric_logger['precision'].reset()
     metric_logger['recall'].reset()
     metric_logger['f1'].reset()
+    metric_logger['bbox_error'].reset()
     
     # Iterate over entire training samples (1 epoch)
     for batch_idx, batch_sample in enumerate(train_loader):
-        data, target = batch_sample
+        data, (cls_target, bbox_target) = batch_sample
         
         # Push data/label to correct device
-        data, target = data.to(device), target.to(device)
+        data = data.to(device)
+        cls_target = cls_target.to(device)
+        bbox_target = bbox_target.to(device)
+
+        # Ensure proper dimensions
+        cls_target = cls_target.squeeze()
         
         # Reset optimizer gradients. Avoids grad accumulation (accumulation used in RNN).
         optimizer.zero_grad()
         
         # Do forward pass for current set of data
-        output = model(data)
+        cls_output, bbox_output = model(data)
         
         # Compute loss based on criterion
-        loss = criterion(output, target)
+        loss = criterion(cls_output, bbox_output, cls_target, bbox_target)
         
         # Computes gradient based on final loss
         loss.backward()
@@ -115,41 +126,44 @@ def train(model, device, train_loader, optimizer, criterion, epoch, batch_size, 
         
         # Optimize model parameters based on learning rate and gradient 
         optimizer.step()
-        
-        # Get predicted index by selecting maximum log-probability
-        pred = output.argmax(dim=1, keepdim=True)
 
-        # Convert the target to be the same dimensions as the prediction
-        target_size_pred = target.view(pred.size())
-        
-        # Count correct predictions overall
-        correct += pred.eq(target_size_pred).sum().item()   # Utilize eq() to sum the number of matching elements
-        
+        # Calculate classification accuracy
+        cls_pred = cls_output.argmax(dim=1)
+        cls_correct += cls_pred.eq(cls_target).sum().item()
+
+        # Calculate bbox loss
+        bbox_loss = F.smooth_l1_loss(bbox_output, bbox_target)
+        bbox_losses.append(bbox_loss.item())
+
         # Update metrics
-        pred = output.argmax(dim=1)
-        target = target.view(-1)
-        metric_logger['precision'].update(pred, target)
-        metric_logger['recall'].update(pred, target)
-        metric_logger['f1'].update(pred, target)
+        metric_logger['precision'].update(cls_pred, cls_target)
+        metric_logger['recall'].update(cls_pred, cls_target)
+        metric_logger['f1'].update(cls_pred, cls_target)
+        metric_logger['bbox_error'].update(bbox_loss)
 
-        # Add some logging every N batches
         if batch_idx % 10 == 0:
             print(f'Train Epoch: {epoch} [{batch_idx * len(data)}/{len(train_loader.dataset)} '
-                  f'({100. * batch_idx / len(train_loader):.0f}%)]\tLoss: {loss.item():.6f}')
+                  f'({100. * batch_idx / len(train_loader):.0f}%)]\t'
+                  f'Loss: {loss.item():.6f}\tBBox Loss: {bbox_loss.item():.6f}')
 
+    # Calculate metrics
     train_loss = float(np.mean(losses))
-    train_acc = correct / ((batch_idx+1) * batch_size)
+    train_bbox_loss = float(np.mean(bbox_losses))
+    train_acc = cls_correct / len(train_loader.dataset)
     precision = metric_logger['precision'].compute()
     recall = metric_logger['recall'].compute()
     f1 = metric_logger['f1'].compute()
+    bbox_error = metric_logger['bbox_error'].compute()
 
-    file.write(f'Epoch {epoch}/{FLAGS.num_epochs}\n')
-    file.write(f'Train set: Loss: {train_loss:.4f}, Accuracy: {correct}/{(batch_idx+1) * batch_size} ({train_acc*100:.2f}%)\n')
+    # Log results
+    file.write(f'Epoch {epoch}\n')
+    file.write(f'Train set: Total Loss: {train_loss:.4f}, BBox Loss: {train_bbox_loss:.4f}\n')
+    file.write(f'Classification Accuracy: {cls_correct}/{len(train_loader.dataset)} ({train_acc*100:.2f}%)\n')
     file.write(f'Precision: {precision:.4f}, Recall: {recall:.4f}, F1 Score: {f1:.4f}\n')
+    file.write(f'Average BBox Error: {bbox_error:.4f}\n')
 
-    return train_loss, train_acc, precision, recall, f1
+    return train_loss, train_acc, precision, recall, f1, bbox_error
     
-
 
 def test(model, device, test_loader, criterion, file, metric_logger):
     '''
@@ -162,58 +176,70 @@ def test(model, device, test_loader, criterion, file, metric_logger):
     # Set model to eval mode to notify all layers.
     model.eval()
     
+    # Empty lists to store losses 
     losses = []
-    correct = 0
+    cls_correct = 0
+    bbox_losses = []
 
     # Reset metrics at the start of testing
     metric_logger['precision'].reset()
     metric_logger['recall'].reset()
     metric_logger['f1'].reset()
+    metric_logger['bbox_error'].reset()
     
     # Set torch.no_grad() to disable gradient computation and backpropagation
     with torch.no_grad():
         for batch_idx, sample in enumerate(test_loader):
-            data, target = sample
-            data, target = data.to(device), target.to(device)
+            data, (cls_target, bbox_target) = sample
+            data = data.to(device)
+            cls_target = cls_target.to(device)
+            bbox_target = bbox_target.to(device)
+
+            # Ensure proper dimensions
+            cls_target = cls_target.squeeze()
             
-            # Predict for data by doing forward pass
-            output = model(data)
+            # Forward pass
+            cls_output, bbox_output = model(data)
             
-            # Compute loss based on criterion
-            loss = criterion(output, target)
-            
-            # Append loss to overall test loss
+            # Compute combined loss
+            loss = criterion(cls_output, bbox_output, cls_target, bbox_target)
             losses.append(loss.item())
             
-            # Get predicted index by selecting maximum log-probability
-            pred = output.argmax(dim=1, keepdim=True)
+            # Calculate classification accuracy
+            cls_pred = cls_output.argmax(dim=1)
+            cls_correct += cls_pred.eq(cls_target).sum().item()
             
-            # Convert the target to be the same dimensions as the prediction
-            target_size_pred = target.view(pred.size())
+            # Calculate bbox loss
+            bbox_loss = F.smooth_l1_loss(bbox_output, bbox_target.view(bbox_output.size()))
+            bbox_losses.append(bbox_loss.item())
             
-            # Count correct predictions overall
-            correct += pred.eq(target_size_pred).sum().item()   # Utilize eq() to sum the number of matching elements
-
             # Update metrics
-            pred = output.argmax(dim=1)
-            target = target.view(-1)
-            metric_logger['precision'].update(pred, target)
-            metric_logger['recall'].update(pred, target)
-            metric_logger['f1'].update(pred, target)
+            cls_pred = cls_output.argmax(dim=1)
+            cls_target = cls_target.view(-1)
+            metric_logger['precision'].update(cls_pred, cls_target)
+            metric_logger['recall'].update(cls_pred, cls_target)
+            metric_logger['f1'].update(cls_pred, cls_target)
+            metric_logger['bbox_error'].update(bbox_loss)
 
+    # Calculate metrics
     test_loss = float(np.mean(losses))
-    accuracy = 100. * correct / len(test_loader.dataset)
+    test_bbox_loss = float(np.mean(bbox_losses))
+    accuracy = cls_correct / len(test_loader.dataset)
     precision = metric_logger['precision'].compute()
     recall = metric_logger['recall'].compute()
     f1 = metric_logger['f1'].compute()
+    bbox_error = metric_logger['bbox_error'].compute()
 
-    file.write(f'Test set: Loss: {test_loss:.4f}, Accuracy: {correct}/{len(test_loader.dataset)} ({accuracy:.2f}%)\n')
-    file.write(f'Precision: {precision:.4f}, Recall: {recall:.4f}, F1 Score: {f1:.4f}\n\n')
+    # Log results
+    file.write(f'Test set: Total Loss: {test_loss:.4f}, BBox Loss: {test_bbox_loss:.4f}\n')
+    file.write(f'Classification Accuracy: {cls_correct}/{len(test_loader.dataset)} ({accuracy:.2f}%)\n')
+    file.write(f'Precision: {precision:.4f}, Recall: {recall:.4f}, F1 Score: {f1:.4f}\n')
+    file.write(f'Average BBox Error: {bbox_error:.4f}\n\n')
 
-    return test_loss, accuracy, precision, recall, f1
+    return test_loss, accuracy, precision, recall, f1, bbox_error
 
 
-def log_final_results(model, device, test_loader, metric_logger):
+def log_final_results(model, device, test_loader, metric_logger, log_dir):
     """
     """
         
@@ -223,131 +249,181 @@ def log_final_results(model, device, test_loader, metric_logger):
     
     # First collect all predictions and targets
     with torch.no_grad():
-        for data, target in test_loader:
-            data, target = data.to(device), target.to(device)
-            output = model(data)
-            preds = output.argmax(dim=1)
+        for data, (cls_target, _) in test_loader:
+            data, cls_target = data.to(device), cls_target.to(device)
+            cls_target = cls_target.view(-1)  # Ensure 1D for targets
+            cls_output, _ = model(data)
+            cls_pred = cls_output.argmax(dim=1)
+            all_preds.extend(cls_pred.cpu().numpy())
+            all_targets.extend(cls_target.cpu().numpy())
             
-            all_preds.extend(preds.cpu().numpy())
-            all_targets.extend(target.cpu().numpy())
-            
-            # Update the PR and ROC curves
-            metric_logger['pr_curve'].update(output.softmax(dim=1), target)
-            metric_logger['roc_curve'].update(output.softmax(dim=1), target)
+            # Update precision-recall and ROC metrics
+            metric_logger['pr_curve'].update(cls_output.softmax(dim=1), cls_target)
+            metric_logger['roc_curve'].update(cls_output.softmax(dim=1), cls_target)
 
-    # Now compute the curves
-    try:
-        # Plot confusion matrix
-        cm = confusion_matrix(all_targets, all_preds)
-        plt.figure(figsize=(10, 8))
-        sns.heatmap(cm, annot=True, fmt="d", cmap="Blues")
-        plt.xlabel('Predicted')
-        plt.ylabel('Actual')
-        plt.title("Confusion Matrix")
-        plt.savefig(f"{FLAGS.log_dir}/confusion_matrix.png")
-        plt.close()
-        
-        # Get PR curve data
-        precision, recall, _ = metric_logger['pr_curve'].compute()
-        
-        # Plot PR curve (handling both tensor and list formats)
-        plt.figure()
-        if isinstance(precision, (list, tuple)):
-            for i, (prec, rec) in enumerate(zip(precision, recall)):
-                plt.plot(rec.cpu().numpy(), prec.cpu().numpy(), label=f'Class {i}')
-        else:
-            # If they're tensors
-            for i in range(len(precision)):
-                plt.plot(recall[i].cpu().numpy(), precision[i].cpu().numpy(), label=f'Class {i}')
-        
-        plt.xlabel('Recall')
-        plt.ylabel('Precision')
-        plt.title("Precision-Recall Curve")
-        plt.legend()
-        plt.savefig(f"{FLAGS.log_dir}/precision_recall_curve.png")
-        plt.close()
-        
-        # Get ROC curve data
-        fpr, tpr, _ = metric_logger['roc_curve'].compute()
-        
-        # Plot ROC curve (handling both tensor and list formats)
-        plt.figure()
-        if isinstance(tpr, (list, tuple)):
-            for i, (false_pos, true_pos) in enumerate(zip(fpr, tpr)):
-                plt.plot(false_pos.cpu().numpy(), true_pos.cpu().numpy(), label=f'Class {i}')
-        else:
-            # If they're tensors
-            for i in range(len(tpr)):
-                plt.plot(fpr[i].cpu().numpy(), tpr[i].cpu().numpy(), label=f'Class {i}')
-        
-        plt.xlabel('False Positive Rate')
-        plt.ylabel('True Positive Rate')
-        plt.title("ROC Curve")
-        plt.legend()
-        plt.savefig(f"{FLAGS.log_dir}/roc_curve.png")
-        plt.close()
-        
-    except Exception as e:
-        print(f"Warning: Could not generate curves due to error: {e}")
-        
-    print("Results saved to:", FLAGS.log_dir)
+    # Confusion Matrix
+    cm = confusion_matrix(all_targets, all_preds)
+    plt.figure(figsize=(10, 8))
+    sns.heatmap(cm, annot=True, fmt="d", cmap="Blues")
+    plt.xlabel('Predicted')
+    plt.ylabel('Actual')
+    plt.title("Confusion Matrix")
+    plt.savefig(f"{log_dir}/confusion_matrix.png")
+    plt.close()
+
+    # Precision-Recall Curve
+    precision, recall, _ = metric_logger['pr_curve'].compute()
+    plt.figure()
+    if isinstance(precision, (list, tuple)):
+        for i, (prec, rec) in enumerate(zip(precision, recall)):
+            plt.plot(rec.cpu().numpy(), prec.cpu().numpy(), label=f'Class {i}')
+    else:
+        for i in range(len(precision)):
+            plt.plot(recall[i].cpu().numpy(), precision[i].cpu().numpy(), label=f'Class {i}')
+    plt.xlabel('Recall')
+    plt.ylabel('Precision')
+    plt.title("Precision-Recall Curve")
+    plt.legend()
+    plt.savefig(f"{log_dir}/precision_recall_curve.png")
+    plt.close()
+
+    # ROC Curve
+    fpr, tpr, _ = metric_logger['roc_curve'].compute()
+    plt.figure()
+    if isinstance(tpr, (list, tuple)):
+        for i, (false_pos, true_pos) in enumerate(zip(fpr, tpr)):
+            plt.plot(false_pos.cpu().numpy(), true_pos.cpu().numpy(), label=f'Class {i}')
+    else:
+        for i in range(len(tpr)):
+            plt.plot(fpr[i].cpu().numpy(), tpr[i].cpu().numpy(), label=f'Class {i}')
+    plt.xlabel('False Positive Rate')
+    plt.ylabel('True Positive Rate')
+    plt.title("ROC Curve")
+    plt.legend()
+    plt.savefig(f"{log_dir}/roc_curve.png")
+    plt.close()
+
+    print("Final results saved to:", log_dir)
 
 
-def load_image(image_path):
-    image = cv2.imread(image_path)
-    return image
+# -------------------------------
+# Object detection methods
+# -------------------------------
 
-def transform_image(image):
-    img_transform = T.ToTensor()
-    image_tensor = img_transform(image)
-    return image_tensor
+class CombinedLoss(nn.Module):
+    def __init__(self, cls_weight, bbox_weight):
+        super(CombinedLoss, self).__init__()
+        self.cls_weight = cls_weight
+        self.bbox_weight = bbox_weight
+        self.cls_criterion = nn.CrossEntropyLoss()
+        self.bbox_criterion = nn.SmoothL1Loss()
+        
+    def forward(self, cls_pred, bbox_pred, cls_target, bbox_target):
+        # Reshape classification target to be 1D
+        cls_target = cls_target.view(-1)
+        
+        # Ensure bbox predictions match target dimensions
+        bbox_pred = bbox_pred.view(bbox_target.size())
+        
+        cls_loss = self.cls_criterion(cls_pred, cls_target)
+        bbox_loss = self.bbox_criterion(bbox_pred, bbox_target)
+        return self.cls_weight * cls_loss + self.bbox_weight * bbox_loss
 
-def find_and_annotate_boxes(model, classnames, test_loader, device):
-    model.eval()
-    # Detect objects
-    bbox, scores, labels = detect_objects(model, test_loader, device)
-    # Draw bounding boxes and labels
-    #result_img = draw_boxes_and_labels(img, bbox, labels, classnames)
-    # Display the result
-    #cv2.imshow('Detected Objects', result_img)
 
-def detect_objects(model, test_loader, device, confidence_threshold=0.80):
-    with torch.no_grad():
-        for batch_idx, sample in enumerate(test_loader):
-            data, target = sample
-            data, target = data.to(device), target.to(device)
-            y_pred = model(data[0])
-            break
-
-    print(f"y_pred = {y_pred}")
+# Helper function to draw bounding boxes on images
+def draw_boxes(image, boxes, classes, class_names, confidence_threshold=0.5):
+    """
+    Draw predicted bounding boxes on the image
     
-    bbox, scores, labels = y_pred[0]['boxes'], y_pred[0]['scores'], y_pred[0]['labels']
-    indices = torch.nonzero(scores > confidence_threshold).squeeze(1)
+    Args:
+        image: PIL Image or numpy array
+        boxes: tensor of shape (num_classes, 4) with (x, y, w, h) coordinates
+        classes: tensor of shape (num_classes) with class probabilities
+        class_names: list of class names
+        confidence_threshold: minimum confidence to draw a box
+    """
+    
+    if not isinstance(image, np.ndarray):
+        image = np.array(image)
+    image = image.astype(np.uint8)
+    if image.shape[-1] == 3:
+        image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+    
+    height, width = image.shape[:2]
+    box_drawn = False
 
-    filtered_bbox = bbox[indices]
-    filtered_scores = scores[indices]
-    filtered_labels = labels[indices]
+    # Move boxes to CPU before operations
+    boxes = boxes.cpu()
+    classes = classes.cpu()
+    
+    for i, (box, conf) in enumerate(zip(boxes, classes)):
+        if conf < confidence_threshold:
+            continue
+            
+        # Convert relative coordinates to absolute pixels
+        dimensions = torch.tensor([width, height, width, height], device='cpu')
+        x, y, w, h = box * dimensions
+        x1, y1 = int(x - w/2), int(y - h/2)
+        x2, y2 = int(x + w/2), int(y + h/2)
+        
+        # Draw rectangle
+        cv2.rectangle(image, (x1, y1), (x2, y2), (0, 255, 0), 2)
+        
+        # Add label
+        label = f"{class_names[i]}: {conf:.2f}"
+        cv2.putText(image, label, (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
 
-    for i in range(len(filtered_bbox)):
-        print(f"Bounding Box: {filtered_bbox[i].cpu().numpy()}")
-        print(f"Score: {filtered_scores[i].cpu().item()}")
-        print(f"Label: {filtered_labels[i].cpu().item()}\n")
+        box_drawn = True
+    
+    return image, box_drawn
 
-    return filtered_bbox, filtered_scores, filtered_labels
+# Example usage
+def detect_objects(model, image_tensor, class_names):
+    model.eval()
+    with torch.no_grad():
+        class_preds, bbox_preds = model(image_tensor)
+        
+        # Get class probabilities
+        class_probs = F.softmax(class_preds, dim=1)
+        
+        # Reshape bbox predictions
+        bbox_preds = bbox_preds.view(-1, len(class_names), 4)
+        
+        return class_probs, bbox_preds
 
-def draw_boxes_and_labels(image, bbox, labels, class_names):
-    img_copy = image.copy()
+# Function to find and annotate boxes on test images
+def find_and_annotate_boxes(model, class_names, test_loader, device, output_dir='detected_boxes'):
+    if os.path.exists(output_dir):
+        shutil.rmtree(output_dir)
+    os.makedirs(output_dir, exist_ok=True)
+    model.eval()
+    
+    with torch.no_grad():
+        for i, (images, (targets, bbox_targets)) in enumerate(test_loader):
+            images = images.to(device)
+            cls_output, bbox_output = model(images)
+            
+            # Process each image in the batch
+            for j, image in enumerate(images):
+                # Convert the tensor to PIL Image
+                img_np = image.cpu().numpy().transpose(1, 2, 0)
+                img_np = (img_np * 255).astype(np.uint8)
+                
+                # Get predictions for this image
+                cls_pred = F.softmax(cls_output[j], dim=0)
+                bbox_pred = bbox_output[j].view(-1, 4)
+                
+                # Draw boxes (no need to explicitly move tensors to CPU - handled in draw_boxes)
+                annotated_img, box_drawn = draw_boxes(img_np, bbox_pred, cls_pred, class_names)
+                
+                # Set filename based on whether a box was drawn
+                prefix = "success_img" if box_drawn else "detected_img"
+                output_path = os.path.join(output_dir, f'{prefix}_{i}_{j}.jpg')
+                
+                # Save the annotated image
+                cv2.imwrite(output_path, cv2.cvtColor(annotated_img, cv2.COLOR_RGB2BGR))
 
-    for i in range(len(bbox)):
-        x, y, w, h = bbox[i].numpy().astype('int')
-        cv2.rectangle(img_copy, (x, y), (w, h), (0, 0, 255), 5)
-
-        class_index = labels[i].numpy().astype('int')
-        class_detected = class_names[class_index - 1]
-
-        cv2.putText(img_copy, class_detected, (x, y + 100), cv2.FONT_HERSHEY_SIMPLEX, 2, (0, 255, 0), 2, cv2.LINE_AA)
-
-    return img_copy
+# -------------------------------
 
 
 def run_main(FLAGS):
@@ -356,6 +432,7 @@ def run_main(FLAGS):
     
     # Set proper device based on cuda availability 
     device = torch.device("cuda" if use_cuda else "cpu")
+    #device = torch.device ("cpu")     # Uncomment this if cuda is taking too long...
     print("Torch device selected: ", device)
     torch.cuda.empty_cache()
     
@@ -363,7 +440,7 @@ def run_main(FLAGS):
     model = ConvNet(FLAGS.num_classes).to(device)
     
     # Define the criterion for loss.
-    criterion = nn.CrossEntropyLoss()
+    criterion = CombinedLoss(cls_weight=FLAGS.class_weight, bbox_weight=FLAGS.bbox_weight)
     
     # Define optimizer function.
     optimizer = optim.Adam(model.parameters(), lr=FLAGS.learning_rate)
@@ -392,13 +469,17 @@ def run_main(FLAGS):
         'f1': F1Score(task='multiclass', num_classes=FLAGS.num_classes, average='macro').to(device),
         'conf_matrix': ConfusionMatrix(task='multiclass', num_classes=FLAGS.num_classes).to(device),
         'pr_curve': PrecisionRecallCurve(task='multiclass', num_classes=FLAGS.num_classes).to(device),
-        'roc_curve': ROC(task='multiclass', num_classes=FLAGS.num_classes).to(device)
+        'roc_curve': ROC(task='multiclass', num_classes=FLAGS.num_classes).to(device),
+        'bbox_error': MeanMetric().to(device)
     }
 
-    best_accuracy = 0.0
-    best_prec = 1.0
-    best_recall = 1.0
-    best_f1 = 1.0
+    best_metrics = {
+        'accuracy': 0.0,
+        'precision': 0.0,
+        'recall': 0.0,
+        'f1': 0.0,
+        'bbox_error': float('inf')
+    }
 
     # Create a directory/file for the output
     if not os.path.exists(FLAGS.log_dir):
@@ -409,6 +490,11 @@ def run_main(FLAGS):
     start_time = time.time()
     now = datetime.now()
     formatted_now = now.strftime("%Y-%m-%d %H:%M:%S")
+
+    # Lists to store average loss and accuracy per epoch for training and testing
+    train_losses, train_accuracies = [], []
+    test_losses, test_accuracies = [], []
+
     with open(output_file_path, 'w') as file:
 
         # Print header information
@@ -422,22 +508,23 @@ def run_main(FLAGS):
 
         # Simulate training
         for epoch in range(1, FLAGS.num_epochs + 1):
-            train_loss, train_acc, train_prec, train_recall, train_f1 = train(
+            train_loss, train_acc, train_prec, train_recall, train_f1, train_bbox = train(
                 model, device, train_loader, optimizer, criterion, epoch, FLAGS.batch_size, file, metric_logger
             )
-            test_loss, test_acc, test_prec, test_recall, test_f1 = test(
+            test_loss, test_acc, test_prec, test_recall, test_f1, test_bbox = test(
                 model, device, valid_loader, criterion, file, metric_logger
             )
             
             # Update model results
-            if test_acc > best_accuracy:
-                best_accuracy = test_acc
-            if test_prec < best_prec:
-                best_prec = test_prec
-            if test_recall < best_recall:
-                best_recall = test_recall
-            if test_f1 < best_f1:
-                best_f1 = test_f1
+            best_metrics['accuracy'] = max(best_metrics['accuracy'], test_acc)
+            best_metrics['precision'] = max(best_metrics['precision'], test_prec)
+            best_metrics['recall'] = max(best_metrics['recall'], test_recall)
+            best_metrics['f1'] = max(best_metrics['f1'], test_f1)
+            best_metrics['bbox_error'] = min(best_metrics['bbox_error'], test_bbox)
+            train_losses.append(train_loss)
+            train_accuracies.append(train_acc)
+            test_losses.append(test_loss)
+            test_accuracies.append(test_acc)
 
             # Debug printing
             total_time = time.time() - start_time
@@ -445,21 +532,60 @@ def run_main(FLAGS):
             minutes, seconds = divmod(remainder, 60)
             print(f"\nTotal training time: {int(hours):02}:{int(minutes):02}:{int(seconds):02} (hh:mm:ss)\n")
             print(f"Epoch: {epoch}")
-            print(f"Train loss: {train_loss}, Train Accuracy: {train_acc}, Train Precision: {train_prec}, Train Recall: {train_recall}, Train F1: {train_f1}")
-            print(f"Test loss: {test_loss}, Test Accuracy: {test_acc}, Test Precision: {test_prec}, Test Recall: {test_recall}, Test F1: {test_f1}\n")
+            print(f"Train loss: {train_loss}, Train Accuracy: {train_acc}")
+            print(f"Test loss: {test_loss}, Test Accuracy: {test_acc}\n")
+
+            # Write final results
+            if epoch == FLAGS.num_epochs:
+                file.write("\n\nFinal Results (Saved Model):")
+                file.write("\nTrain accuracy: {:.2f}%".format(train_acc))
+                file.write("\nTrain precision: {:.4f}".format(train_prec))
+                file.write("\nTrain recall: {:.4f}".format(train_recall))
+                file.write("\nTrain F1 score: {:.4f}".format(train_f1))
+                file.write("\nTrain bbox error: {:.4f}\n".format(train_bbox))
+                file.write("\nTest accuracy: {:.2f}%".format(test_acc))
+                file.write("\nTest precision: {:.4f}".format(test_prec))
+                file.write("\nTest recall: {:.4f}".format(test_recall))
+                file.write("\nTest F1 score: {:.4f}".format(test_f1))
+                file.write("\nTest bbox error: {:.4f}\n".format(test_bbox))
         
-        file.write("\nBest test accuracy: {:.2f}%".format(best_accuracy))
-        file.write("\nBest test precision: {:.2f}".format(best_prec))
-        file.write("\nBest test recall: {:.2f}".format(best_recall))
-        file.write("\nBest test f1 score: {:.2f}".format(best_f1))
-        log_final_results(model, device, valid_loader, metric_logger)
-        #classnames = ['B-1_TopDown', 'B-2_TopDown', 'C-130_TopDown', 'C-5_TopDown', 'E-3_TopDown']
-        #find_and_annotate_boxes(model, classnames, test_loader, device)
-        total_time = time.time() - start_time
-        hours, remainder = divmod(total_time, 3600)
-        minutes, seconds = divmod(remainder, 60)
-        file.write("\nTotal time: {:02}:{:02}:{:02} (hh:mm:ss)\n".format(int(hours), int(minutes), int(seconds)))
-        file.write("------------------------------------------------------\n\n\n\n")
+        # Write best results
+        file.write("\nBest Results:")
+        file.write("\nTest accuracy: {:.2f}%".format(best_metrics['accuracy']))
+        file.write("\nTest precision: {:.4f}".format(best_metrics['precision']))
+        file.write("\nTest recall: {:.4f}".format(best_metrics['recall']))
+        file.write("\nTest F1 score: {:.4f}".format(best_metrics['f1']))
+        file.write("\nBest bbox error: {:.4f}".format(best_metrics['bbox_error']))
+        file.write("\n--------------------------------------------------------------------\n")
+
+        # Generate final visualizations
+        log_final_results(model, device, valid_loader, metric_logger, FLAGS.log_dir)
+        
+        # Save example detections
+        classnames = ['B-1_TopDown', 'B-2_TopDown', 'C-130_TopDown', 'C-5_TopDown', 'E-3_TopDown']
+        find_and_annotate_boxes(model, classnames, train_loader, device)
+
+        # Plot and save the average loss per epoch
+        plt.figure(figsize=(10, 5))
+        plt.plot(range(1, FLAGS.num_epochs + 1), train_losses, label="Train Loss")
+        plt.plot(range(1, FLAGS.num_epochs + 1), test_losses, label="Test Loss")
+        plt.xlabel("Epoch")
+        plt.ylabel("Average Loss")
+        plt.title("Average Loss per Epoch")
+        plt.legend()
+        plt.savefig(f"./{FLAGS.log_dir}/avg_loss_per_epoch.png")
+        plt.close()
+
+        # Plot and save the average accuracy per epoch
+        plt.figure(figsize=(10, 5))
+        plt.plot(range(1, FLAGS.num_epochs + 1), train_accuracies, label="Train Accuracy")
+        plt.plot(range(1, FLAGS.num_epochs + 1), test_accuracies, label="Test Accuracy")
+        plt.xlabel("Epoch")
+        plt.ylabel("Average Accuracy")
+        plt.title("Average Accuracy per Epoch")
+        plt.legend()
+        plt.savefig(f"./{FLAGS.log_dir}/avg_accuracy_per_epoch.png")
+        plt.close()
     
     
 if __name__ == '__main__':
@@ -482,6 +608,12 @@ if __name__ == '__main__':
     parser.add_argument('--num_classes',
                         type=int, default=5,
                         help='Number of output classes. Represents total number of label types.')
+    parser.add_argument('--class_weight',
+                        type=int, default=1.0,
+                        help='Weight of class loss in overall loss calculation. Between 0 and 1')
+    parser.add_argument('--bbox_weight',
+                        type=int, default=0.0,
+                        help='Weight of bbox loss in overall loss calculation. Between 0 and 1')
     
     FLAGS = None
     FLAGS, unparsed = parser.parse_known_args()
