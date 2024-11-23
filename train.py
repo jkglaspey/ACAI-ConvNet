@@ -1,12 +1,16 @@
+# Standard library imports
 from __future__ import print_function
 import argparse
 from datetime import datetime
 import os
-import time
-import numpy as np
-import matplotlib.pyplot as plt
-import seaborn as sns
 import shutil
+import time
+
+# Third-party library imports
+import cv2
+import matplotlib.pyplot as plt
+import numpy as np
+import seaborn as sns
 from PIL import Image, ImageDraw
 from sklearn.metrics import confusion_matrix
 import torch
@@ -15,22 +19,40 @@ import torch.nn.functional as F
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 from torch.utils.tensorboard import SummaryWriter
-from torchmetrics import MeanMetric
+from torchmetrics import (
+    Precision, Recall, F1Score, 
+    ConfusionMatrix, PrecisionRecallCurve, 
+    ROC, Accuracy, MeanMetric
+)
 import torchvision.transforms.functional as TF
 from torchvision import datasets, transforms
 from torchvision import transforms as T
-import cv2
-from torchmetrics import (
-    Precision, Recall, F1Score, MeanMetric,
-    ConfusionMatrix, PrecisionRecallCurve, ROC, Accuracy
-)
+
+# Local imports
 from ConvNet import ConvNet
+
+
 
 # -------------------------------------------------------------------------
 # Classes
 # -------------------------------------------------------------------------
 
 class CustomDataset(Dataset):
+    """
+    Description:
+        A custom dataset class that loads images and their corresponding labels in YOLO format.
+        Inherits from torch.utils.data.Dataset.
+
+    Args:
+        images_dir (str): Directory path containing the image files
+        labels_dir (str): Directory path containing the label files
+        transform (callable, optional): Optional transform to be applied on a sample
+
+    Methods:
+        __len__(): Returns the total number of samples
+        __getitem__(idx): Returns the image and its corresponding labels at given index
+    """
+
     def __init__(self, images_dir, labels_dir, transform=None):
         super(CustomDataset, self).__init__()
         self.images_dir = images_dir
@@ -67,21 +89,37 @@ class CustomDataset(Dataset):
         return image, (class_target, bbox_target)
     
 
+
 # -------------------------------------------------------------------------
 # Methods
 # -------------------------------------------------------------------------
 
 def train(model, device, train_loader, optimizer, criterion, epoch, batch_size, file, metric_logger):
-    '''
-    Trains the model for an epoch and optimizes it.
-    model: The model to train. Should already be in correct device.
-    device: 'cuda' or 'cpu'.
-    train_loader: dataloader for training samples.
-    optimizer: optimizer to use for model parameter updates.
-    criterion: used to compute loss for prediction and target 
-    epoch: Current epoch to train for.
-    batch_size: Batch size to be used.
-    '''
+    """
+    Description:
+        Trains the model for one epoch using the provided data loader and optimization parameters.
+        Updates model weights and tracks various performance metrics.
+
+    Args:
+        model (nn.Module): The neural network model to train
+        device (torch.device): The device to run the training on ('cuda' or 'cpu')
+        train_loader (DataLoader): DataLoader containing the training data
+        optimizer (torch.optim.Optimizer): The optimizer for updating model parameters
+        criterion (nn.Module): The loss function to use for training
+        epoch (int): Current epoch number
+        batch_size (int): Size of each training batch
+        file (file object): File handle for logging training progress
+        metric_logger (dict): Dictionary containing various metric tracking objects
+
+    Returns:
+        tuple: Contains:
+            - train_loss (float): Average training loss for the epoch
+            - train_acc (float): Training accuracy for the epoch
+            - precision (float): Training precision score
+            - recall (float): Training recall score
+            - f1 (float): Training F1 score
+            - bbox_error (float): Average bounding box error
+    """
     
     # Set model to train mode before each epoch
     model.train()
@@ -141,10 +179,17 @@ def train(model, device, train_loader, optimizer, criterion, epoch, batch_size, 
         metric_logger['f1'].update(cls_pred, cls_target)
         metric_logger['bbox_error'].update(bbox_loss)
 
-        if batch_idx % 10 == 0:
+        if batch_idx < len(train_loader) - 1:
             print(f'Train Epoch: {epoch} [{batch_idx * len(data)}/{len(train_loader.dataset)} '
-                  f'({100. * batch_idx / len(train_loader):.0f}%)]\t'
-                  f'Loss: {loss.item():.6f}\tBBox Loss: {bbox_loss.item():.6f}')
+                f'({100. * batch_idx / len(train_loader):.0f}%)]     '
+                f'Loss: {loss.item():.6f}\t\t', end='\r', flush=True)
+        else:
+            print(f'Train Epoch: {epoch} [{len(train_loader.dataset)}/{len(train_loader.dataset)} '
+                f'(100%)]     Loss: {loss.item():.6f}\t\t', end='\r', flush=True)
+
+        #BBox Loss: {bbox_loss.item():.6f}
+
+    print()
 
     # Calculate metrics
     train_loss = float(np.mean(losses))
@@ -164,14 +209,29 @@ def train(model, device, train_loader, optimizer, criterion, epoch, batch_size, 
 
     return train_loss, train_acc, precision, recall, f1, bbox_error
     
-
 def test(model, device, test_loader, criterion, file, metric_logger):
-    '''
-    Tests the model.
-    model: The model to train. Should already be in correct device.
-    device: 'cuda' or 'cpu'.
-    test_loader: dataloader for test samples.
-    '''
+    """
+    Description:
+        Evaluates the model's performance on test data, computing various metrics
+        without updating model parameters.
+
+    Args:
+        model (nn.Module): The neural network model to evaluate
+        device (torch.device): The device to run the evaluation on ('cuda' or 'cpu')
+        test_loader (DataLoader): DataLoader containing the test data
+        criterion (nn.Module): The loss function to use for evaluation
+        file (file object): File handle for logging test results
+        metric_logger (dict): Dictionary containing various metric tracking objects
+
+    Returns:
+        tuple: Contains:
+            - test_loss (float): Average test loss
+            - accuracy (float): Test accuracy
+            - precision (float): Test precision score
+            - recall (float): Test recall score
+            - f1 (float): Test F1 score
+            - bbox_error (float): Average bounding box error
+    """
     
     # Set model to eval mode to notify all layers.
     model.eval()
@@ -238,14 +298,152 @@ def test(model, device, test_loader, criterion, file, metric_logger):
 
     return test_loss, accuracy, precision, recall, f1, bbox_error
 
+def calculate_confidence_curves(all_predictions, all_confidences, all_targets, num_classes, thresholds=None):
+    """
+    Description:
+        Calculates precision, recall, and F1 scores at different confidence thresholds
+        for each class to generate confidence curves.
+
+    Args:
+        all_predictions (torch.Tensor): Tensor containing model predictions
+        all_confidences (torch.Tensor): Tensor containing confidence scores for predictions
+        all_targets (torch.Tensor): Tensor containing ground truth labels
+        num_classes (int): Number of classes in the dataset
+        thresholds (list, optional): List of confidence thresholds to evaluate
+
+    Returns:
+        tuple: Contains:
+            - metrics (dict): Dictionary containing F1, precision, and recall scores for each class at each threshold
+            - thresholds (list): List of thresholds used for evaluation
+    """
+
+    if thresholds is None:
+        thresholds = torch.linspace(0, 1, 100)
+    
+    # Initialize dictionaries for each metric
+    metrics = {
+        'f1': {i: [] for i in range(num_classes)},
+        'precision': {i: [] for i in range(num_classes)},
+        'recall': {i: [] for i in range(num_classes)}
+    }
+    # Add 'all' key for overall metrics
+    for metric in metrics:
+        metrics[metric]['all'] = []
+    
+    # Calculate metrics for each threshold
+    for threshold in thresholds:
+        # Initialize counters for each class
+        tp = torch.zeros(num_classes)
+        fp = torch.zeros(num_classes)
+        fn = torch.zeros(num_classes)
+        
+        # Filter predictions by confidence threshold
+        mask = all_confidences >= threshold
+        filtered_preds = all_predictions[mask]
+        filtered_targets = all_targets[mask]
+        
+        # Calculate metrics for each class
+        for class_idx in range(num_classes):
+            pred_class = filtered_preds == class_idx
+            true_class = filtered_targets == class_idx
+            
+            tp[class_idx] = (pred_class & true_class).sum().float()
+            fp[class_idx] = (pred_class & ~true_class).sum().float()
+            fn[class_idx] = (~pred_class & true_class).sum().float()
+        
+        # Calculate metrics for each class
+        for class_idx in range(num_classes):
+            if tp[class_idx] + fp[class_idx] + fn[class_idx] == 0:
+                precision = 0.0
+                recall = 0.0
+                f1 = 0.0
+            else:
+                precision = tp[class_idx] / (tp[class_idx] + fp[class_idx] + 1e-10)
+                recall = tp[class_idx] / (tp[class_idx] + fn[class_idx] + 1e-10)
+                f1 = 2 * (precision * recall) / (precision + recall + 1e-10)
+            
+            metrics['f1'][class_idx].append(f1)
+            metrics['precision'][class_idx].append(precision)
+            metrics['recall'][class_idx].append(recall)
+        
+        # Calculate overall metrics (macro average)
+        for metric_name in ['f1', 'precision', 'recall']:
+            overall = sum(metrics[metric_name][i][-1] for i in range(num_classes)) / num_classes
+            metrics[metric_name]['all'].append(overall)
+    
+    return metrics, thresholds.tolist()
+
+def plot_confidence_curve(thresholds, metrics, metric_name, class_names, log_dir):
+    """
+    Description:
+        Creates and saves a plot showing how a specific metric (F1, precision, or recall)
+        varies with confidence threshold for each class.
+
+    Args:
+        thresholds (list): List of confidence thresholds
+        metrics (dict): Dictionary containing metric values for each class
+        metric_name (str): Name of the metric to plot ('f1', 'precision', or 'recall')
+        class_names (list): List of class names
+        log_dir (str): Directory path to save the plot
+
+    Returns:
+        None: Saves the plot to the specified directory
+    """
+
+    plt.figure(figsize=(12, 8))
+    colors = ['blue', 'orange', 'green', 'red', 'purple']
+    
+    # Plot individual class curves
+    for i, (class_idx, color) in enumerate(zip(range(len(class_names)), colors)):
+        plt.plot(thresholds, metrics[metric_name][class_idx], 
+                color=color, label=class_names[i], alpha=0.7)
+    
+    # Plot overall curve (thicker line)
+    plt.plot(thresholds, metrics[metric_name]['all'], 
+            color='black', label='all classes', linewidth=3, alpha=0.8)
+    
+    # Find and annotate maximum score point
+    max_score_idx = np.argmax(metrics[metric_name]['all'])
+    max_score = metrics[metric_name]['all'][max_score_idx]
+    max_conf = thresholds[max_score_idx]
+    plt.plot([max_conf], [max_score], 'ko')
+    
+    plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+    plt.grid(True, alpha=0.3)
+    plt.xlabel('Confidence')
+    plt.ylabel(metric_name.capitalize())
+    plt.title(f'{metric_name.capitalize()}-Confidence Curve')
+    
+    # Add annotation for maximum point
+    annotation = f'all classes {max_score:.2f} at {max_conf:.3f}'
+    plt.text(0.98, 0.02, annotation, transform=plt.gca().transAxes,
+             horizontalalignment='right', verticalalignment='bottom')
+    
+    plt.tight_layout()
+    plt.savefig(f"{log_dir}/curves/{metric_name}_confidence_curve.png", bbox_inches='tight')
+    plt.close()
 
 def log_final_results(model, device, test_loader, metric_logger, log_dir):
     """
+    Description:
+        Generates and saves final evaluation metrics and visualizations including
+        confusion matrix, ROC curves, and precision-recall curves.
+
+    Args:
+        model (nn.Module): The trained model to evaluate
+        device (torch.device): The device to run evaluation on
+        test_loader (DataLoader): DataLoader containing test data
+        metric_logger (dict): Dictionary containing metric tracking objects
+        log_dir (str): Directory path to save results and visualizations
+
+    Returns:
+        None: Saves various plots and metrics to the specified directory
     """
         
     model.eval()
     all_preds = []
     all_targets = []
+    all_confidences = []
     
     # First collect all predictions and targets
     with torch.no_grad():
@@ -253,25 +451,38 @@ def log_final_results(model, device, test_loader, metric_logger, log_dir):
             data, cls_target = data.to(device), cls_target.to(device)
             cls_target = cls_target.view(-1)  # Ensure 1D for targets
             cls_output, _ = model(data)
-            cls_pred = cls_output.argmax(dim=1)
+
+            # Get class predictions and confidences
+            cls_probs = F.softmax(cls_output, dim=1)
+            confidences, cls_pred = torch.max(cls_probs, dim=1)
+
             all_preds.extend(cls_pred.cpu().numpy())
             all_targets.extend(cls_target.cpu().numpy())
+            all_confidences.extend(confidences.cpu())
             
             # Update precision-recall and ROC metrics
             metric_logger['pr_curve'].update(cls_output.softmax(dim=1), cls_target)
             metric_logger['roc_curve'].update(cls_output.softmax(dim=1), cls_target)
 
-    # Confusion Matrix
-    cm = confusion_matrix(all_targets, all_preds)
-    plt.figure(figsize=(10, 8))
-    sns.heatmap(cm, annot=True, fmt="d", cmap="Blues")
-    plt.xlabel('Predicted')
-    plt.ylabel('Actual')
-    plt.title("Confusion Matrix")
-    plt.savefig(f"{log_dir}/confusion_matrix.png")
-    plt.close()
+    # Convert lists to tensors
+    all_preds = torch.tensor(all_preds)
+    all_targets = torch.tensor(all_targets)
+    all_confidences = torch.tensor(all_confidences)
 
-    # Precision-Recall Curve
+    # Define class labels
+    confusion_labels = ['B-1_TopDown', 'B-2_TopDown', 'C-130_TopDown', 'C-5_TopDown', 'E-3_TopDown']
+
+    metrics, thresholds = calculate_confidence_curves(
+        all_preds, all_confidences, all_targets, 
+        num_classes=len(confusion_labels)
+    )
+    
+    # ---------- F1, Precision, & Recall Curve ----------
+    for metric_name in ['f1', 'precision', 'recall']:
+        plot_confidence_curve(thresholds, metrics, metric_name, 
+                            confusion_labels, log_dir)
+
+    # ---------- Precision-Recall Curve ----------
     precision, recall, _ = metric_logger['pr_curve'].compute()
     plt.figure()
     if isinstance(precision, (list, tuple)):
@@ -284,10 +495,10 @@ def log_final_results(model, device, test_loader, metric_logger, log_dir):
     plt.ylabel('Precision')
     plt.title("Precision-Recall Curve")
     plt.legend()
-    plt.savefig(f"{log_dir}/precision_recall_curve.png")
+    plt.savefig(f"{log_dir}/curves/precision_recall_curve.png")
     plt.close()
 
-    # ROC Curve
+    # ---------- ROC Curve ----------
     fpr, tpr, _ = metric_logger['roc_curve'].compute()
     plt.figure()
     if isinstance(tpr, (list, tuple)):
@@ -300,17 +511,90 @@ def log_final_results(model, device, test_loader, metric_logger, log_dir):
     plt.ylabel('True Positive Rate')
     plt.title("ROC Curve")
     plt.legend()
-    plt.savefig(f"{log_dir}/roc_curve.png")
+    plt.savefig(f"{log_dir}/curves/roc_curve.png")
+    plt.close()
+
+    # ---------- Confusion Matrix ----------
+    cm = confusion_matrix(all_preds, all_targets)
+
+    # Normalize by row (sum of each row = 100%)
+    cm_normalized = cm.astype('float') / cm.sum(axis=1)[:, np.newaxis]
+    # Replace NaN with 0 (in case of empty rows)
+    cm_normalized = np.nan_to_num(cm_normalized)
+
+    plt.figure(figsize=(10, 8))
+    sns.heatmap(cm_normalized, annot=True, fmt=".2f", cmap="Blues", xticklabels=confusion_labels, yticklabels=confusion_labels)
+    plt.ylabel('Predicted')
+    plt.xlabel('True')
+    plt.title("Confusion Matrix")
+
+    plt.tight_layout()  # Adjust layout to prevent label cutoff
+    
+    plt.savefig(f"{log_dir}/confusion_matrix.png")
     plt.close()
 
     print("Final results saved to:", log_dir)
 
+def plot_epoch_data(num_epochs, log_dir, train_losses, test_losses, train_accuracies, test_accuracies):
+    """
+    Description:
+        Creates and saves plots showing the progression of model performance metrics
+        (loss and accuracy) over training epochs for both training and test sets.
 
-# -------------------------------
+    Args:
+        num_epochs (int): Total number of training epochs
+        log_dir (str): Directory path to save the generated plots
+        train_losses (list): List of average training losses for each epoch
+        test_losses (list): List of average test losses for each epoch
+        train_accuracies (list): List of training accuracies for each epoch
+        test_accuracies (list): List of test accuracies for each epoch
+
+    Returns:
+        None: Saves two plots to the specified directory:
+            - avg_loss_per_epoch.png: Plot of training and test losses over epochs
+            - avg_accuracy_per_epoch.png: Plot of training and test accuracies over epochs
+    """
+
+    # Plot and save the average loss per epoch
+    plt.figure(figsize=(10, 5))
+    plt.plot(range(1, num_epochs + 1), train_losses, label="Train Loss")
+    plt.plot(range(1, num_epochs + 1), test_losses, label="Test Loss")
+    plt.xlabel("Epoch")
+    plt.ylabel("Average Loss")
+    plt.title("Average Loss per Epoch")
+    plt.legend()
+    plt.savefig(f"./{log_dir}/epochs/avg_loss_per_epoch.png")
+    plt.close()
+
+    # Plot and save the average accuracy per epoch
+    plt.figure(figsize=(10, 5))
+    plt.plot(range(1, num_epochs + 1), train_accuracies, label="Train Accuracy")
+    plt.plot(range(1, num_epochs + 1), test_accuracies, label="Test Accuracy")
+    plt.xlabel("Epoch")
+    plt.ylabel("Average Accuracy")
+    plt.title("Average Accuracy per Epoch")
+    plt.legend()
+    plt.savefig(f"./{log_dir}/epochs/avg_accuracy_per_epoch.png")
+    plt.close()
+
+# -------------------------------------------------------------------------
 # Object detection methods
-# -------------------------------
+# -------------------------------------------------------------------------
 
 class CombinedLoss(nn.Module):
+    """
+    Description:
+        A custom loss function that combines classification and bounding box regression losses.
+        Inherits from nn.Module.
+
+    Args:
+        cls_weight (float): Weight factor for classification loss
+        bbox_weight (float): Weight factor for bounding box regression loss
+
+    Methods:
+        forward(cls_pred, bbox_pred, cls_target, bbox_target): Computes the combined loss
+    """
+
     def __init__(self, cls_weight, bbox_weight):
         super(CombinedLoss, self).__init__()
         self.cls_weight = cls_weight
@@ -329,18 +613,22 @@ class CombinedLoss(nn.Module):
         bbox_loss = self.bbox_criterion(bbox_pred, bbox_target)
         return self.cls_weight * cls_loss + self.bbox_weight * bbox_loss
 
-
-# Helper function to draw bounding boxes on images
 def draw_boxes(image, boxes, classes, class_names, confidence_threshold=0.5):
     """
-    Draw predicted bounding boxes on the image
-    
+    Description:
+        Draws predicted bounding boxes and class labels on an image with confidence scores.
+
     Args:
-        image: PIL Image or numpy array
-        boxes: tensor of shape (num_classes, 4) with (x, y, w, h) coordinates
-        classes: tensor of shape (num_classes) with class probabilities
-        class_names: list of class names
-        confidence_threshold: minimum confidence to draw a box
+        image (PIL.Image or numpy.ndarray): Input image to draw boxes on
+        boxes (torch.Tensor): Tensor of shape (num_classes, 4) containing box coordinates
+        classes (torch.Tensor): Tensor of shape (num_classes) containing class probabilities
+        class_names (list): List of class names for labeling
+        confidence_threshold (float, optional): Minimum confidence score to draw a box
+
+    Returns:
+        tuple: Contains:
+            - image (numpy.ndarray): Image with drawn boxes
+            - box_drawn (bool): Whether any boxes were drawn
     """
     
     if not isinstance(image, np.ndarray):
@@ -377,8 +665,22 @@ def draw_boxes(image, boxes, classes, class_names, confidence_threshold=0.5):
     
     return image, box_drawn
 
-# Example usage
 def detect_objects(model, image_tensor, class_names):
+    """
+    Description:
+        Performs object detection on a single image using the trained model.
+
+    Args:
+        model (nn.Module): The trained detection model
+        image_tensor (torch.Tensor): Input image tensor
+        class_names (list): List of class names
+
+    Returns:
+        tuple: Contains:
+            - class_probs (torch.Tensor): Class probabilities for detected objects
+            - bbox_preds (torch.Tensor): Predicted bounding box coordinates
+    """
+
     model.eval()
     with torch.no_grad():
         class_preds, bbox_preds = model(image_tensor)
@@ -391,8 +693,23 @@ def detect_objects(model, image_tensor, class_names):
         
         return class_probs, bbox_preds
 
-# Function to find and annotate boxes on test images
 def find_and_annotate_boxes(model, class_names, test_loader, device, output_dir='detected_boxes'):
+    """
+    Description:
+        Processes a batch of images through the model and saves annotated versions
+        with detected boxes and class labels.
+
+    Args:
+        model (nn.Module): The trained detection model
+        class_names (list): List of class names
+        test_loader (DataLoader): DataLoader containing images to process
+        device (torch.device): Device to run detection on
+        output_dir (str, optional): Directory to save annotated images
+
+    Returns:
+        None: Saves annotated images to the specified directory
+    """
+
     if os.path.exists(output_dir):
         shutil.rmtree(output_dir)
     os.makedirs(output_dir, exist_ok=True)
@@ -423,10 +740,33 @@ def find_and_annotate_boxes(model, class_names, test_loader, device, output_dir=
                 # Save the annotated image
                 cv2.imwrite(output_path, cv2.cvtColor(annotated_img, cv2.COLOR_RGB2BGR))
 
-# -------------------------------
 
+
+# -------------------------------------------------------------------------
+# Main - Program Order
+# -------------------------------------------------------------------------
 
 def run_main(FLAGS):
+    """
+    Description:
+        Main function that orchestrates the entire training and evaluation pipeline.
+        Sets up the model, dataloaders, and training parameters, then runs training
+        and final evaluation.
+
+    Args:
+        FLAGS (argparse.Namespace): Command line arguments containing:
+            - learning_rate (float): Initial learning rate
+            - num_epochs (int): Number of training epochs
+            - batch_size (int): Training batch size
+            - log_dir (str): Directory for saving logs and results
+            - num_classes (int): Number of object classes
+            - class_weight (float): Weight for classification loss
+            - bbox_weight (float): Weight for bounding box loss
+
+    Returns:
+        None: Trains model and saves results to specified directory
+    """
+
     # Check if cuda is available
     use_cuda = torch.cuda.is_available()
     
@@ -530,10 +870,10 @@ def run_main(FLAGS):
             total_time = time.time() - start_time
             hours, remainder = divmod(total_time, 3600)
             minutes, seconds = divmod(remainder, 60)
-            print(f"\nTotal training time: {int(hours):02}:{int(minutes):02}:{int(seconds):02} (hh:mm:ss)\n")
-            print(f"Epoch: {epoch}")
-            print(f"Train loss: {train_loss}, Train Accuracy: {train_acc}")
-            print(f"Test loss: {test_loss}, Test Accuracy: {test_acc}\n")
+            #print(f"\nTotal training time: {int(hours):02}:{int(minutes):02}:{int(seconds):02} (hh:mm:ss)\n")
+            #print(f"Epoch: {epoch}")
+            #print(f"Train loss: {train_loss}, Train Accuracy: {train_acc}")
+            #print(f"Test loss: {test_loss}, Test Accuracy: {test_acc}\n")
 
             # Write final results
             if epoch == FLAGS.num_epochs:
@@ -565,29 +905,9 @@ def run_main(FLAGS):
         classnames = ['B-1_TopDown', 'B-2_TopDown', 'C-130_TopDown', 'C-5_TopDown', 'E-3_TopDown']
         find_and_annotate_boxes(model, classnames, train_loader, device)
 
-        # Plot and save the average loss per epoch
-        plt.figure(figsize=(10, 5))
-        plt.plot(range(1, FLAGS.num_epochs + 1), train_losses, label="Train Loss")
-        plt.plot(range(1, FLAGS.num_epochs + 1), test_losses, label="Test Loss")
-        plt.xlabel("Epoch")
-        plt.ylabel("Average Loss")
-        plt.title("Average Loss per Epoch")
-        plt.legend()
-        plt.savefig(f"./{FLAGS.log_dir}/avg_loss_per_epoch.png")
-        plt.close()
-
-        # Plot and save the average accuracy per epoch
-        plt.figure(figsize=(10, 5))
-        plt.plot(range(1, FLAGS.num_epochs + 1), train_accuracies, label="Train Accuracy")
-        plt.plot(range(1, FLAGS.num_epochs + 1), test_accuracies, label="Test Accuracy")
-        plt.xlabel("Epoch")
-        plt.ylabel("Average Accuracy")
-        plt.title("Average Accuracy per Epoch")
-        plt.legend()
-        plt.savefig(f"./{FLAGS.log_dir}/avg_accuracy_per_epoch.png")
-        plt.close()
-    
-    
+        # Plot average loss per epoch and average accuracy per epoch
+        plot_epoch_data(FLAGS.num_epochs, FLAGS.log_dir, train_losses, test_losses, train_accuracies, test_accuracies)
+ 
 if __name__ == '__main__':
     # Set parameters for Sparse Autoencoder
     parser = argparse.ArgumentParser('CNN: Aircraft Segmentation.')
@@ -599,7 +919,7 @@ if __name__ == '__main__':
                         default=30,
                         help='Number of epochs to run trainer.')
     parser.add_argument('--batch_size',
-                        type=int, default=64,
+                        type=int, default=16,
                         help='Batch size. Must divide evenly into the dataset sizes.')
     parser.add_argument('--log_dir',
                         type=str,
