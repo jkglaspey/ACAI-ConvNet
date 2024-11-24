@@ -1,0 +1,227 @@
+
+--------------------------------------------------------------------
+- Date: 2024-11-23 20:37:06
+- Learning rate: 1e-05
+- Epochs: 30
+- Batch size: 16
+
+- Classes: 5
+
+Epoch 1
+Train set: Total Loss: 1.6112
+Classification Accuracy: 250/1027 (24.34%)
+Precision: 0.2506, Recall: 0.2436, F1 Score: 0.2251
+Valid set: Valid Loss: 1.5914
+Classification Accuracy: 62/294 (21.09%)
+Precision: 0.2405, Recall: 0.2100, F1 Score: 0.0865
+Epoch 2
+Train set: Total Loss: 1.5766
+Classification Accuracy: 277/1027 (26.97%)
+Precision: 0.2871, Recall: 0.2699, F1 Score: 0.2676
+Valid set: Valid Loss: 1.5396
+Classification Accuracy: 101/294 (34.35%)
+Precision: 0.3556, Recall: 0.3392, F1 Score: 0.2788
+Epoch 3
+Train set: Total Loss: 1.5157
+Classification Accuracy: 366/1027 (35.64%)
+Precision: 0.3705, Recall: 0.3584, F1 Score: 0.3599
+Valid set: Valid Loss: 1.4547
+Classification Accuracy: 127/294 (43.20%)
+Precision: 0.2851, Recall: 0.4371, F1 Score: 0.3256
+Epoch 4
+Train set: Total Loss: 1.4464
+Classification Accuracy: 418/1027 (40.70%)
+Precision: 0.3965, Recall: 0.4128, F1 Score: 0.3837
+Valid set: Valid Loss: 1.3461
+Classification Accuracy: 170/294 (57.82%)
+Precision: 0.5988, Recall: 0.5800, F1 Score: 0.5543
+Epoch 5
+Train set: Total Loss: 1.3271
+Classification Accuracy: 480/1027 (46.74%)
+Precision: 0.4670, Recall: 0.4725, F1 Score: 0.4540
+Valid set: Valid Loss: 1.2136
+Classification Accuracy: 176/294 (59.86%)
+Precision: 0.6372, Recall: 0.5998, F1 Score: 0.5834
+Epoch 6
+Train set: Total Loss: 1.2158
+Classification Accuracy: 528/1027 (51.41%)
+Precision: 0.5141, Recall: 0.5178, F1 Score: 0.5045
+Valid set: Valid Loss: 1.0996
+Classification Accuracy: 178/294 (60.54%)
+Precision: 0.6340, Recall: 0.6066, F1 Score: 0.5835
+Epoch 7
+Train set: Total Loss: 1.1240
+Classification Accuracy: 574/1027 (55.89%)
+Precision: 0.5635, Recall: 0.5621, F1 Score: 0.5454
+Valid set: Valid Loss: 1.0357
+Classification Accuracy: 173/294 (58.84%)
+Precision: 0.6085, Recall: 0.5908, F1 Score: 0.5658
+Epoch 8
+Train set: Total Loss: 1.0875
+Classification Accuracy: 579/1027 (56.38%)
+Precision: 0.5638, Recall: 0.5658, F1 Score: 0.5605
+Valid set: Valid Loss: 0.9484
+Classification Accuracy: 197/294 (67.01%)
+Precision: 0.6952, Recall: 0.6709, F1 Score: 0.6705
+Epoch 9
+Train set: Total Loss: 0.9809
+Classification Accuracy: 646/1027 (62.90%)
+Precision: 0.6395, Recall: 0.6309, F1 Score: 0.6264
+Valid set: Valid Loss: 0.8950
+Classification Accuracy: 204/294 (69.39%)
+Precision: 0.7156, Recall: 0.6934, F1 Score: 0.6984
+Epoch 10
+Train set: Total Loss: 0.9464
+Classification Accuracy: 659/1027 (64.17%)
+Precision: 0.6454, Recall: 0.6424, F1 Score: 0.6385
+Valid set: Valid Loss: 0.8494
+Classification Accuracy: 200/294 (68.03%)
+Precision: 0.7014, Recall: 0.6817, F1 Score: 0.6712
+Epoch 11
+Train set: Total Loss: 0.8817
+Classification Accuracy: 676/1027 (65.82%)
+Precision: 0.6585, Recall: 0.6594, F1 Score: 0.6559
+Valid set: Valid Loss: 0.7654
+Classification Accuracy: 225/294 (76.53%)
+Precision: 0.7819, Recall: 0.7632, F1 Score: 0.7597
+Epoch 12
+Train set: Total Loss: 0.8167
+Classification Accuracy: 718/1027 (69.91%)
+Precision: 0.7033, Recall: 0.6987, F1 Score: 0.6991
+Valid set: Valid Loss: 0.7184
+Classification Accuracy: 216/294 (73.47%)
+Precision: 0.7403, Recall: 0.7344, F1 Score: 0.7279
+Epoch 13
+Train set: Total Loss: 0.7420
+Classification Accuracy: 745/1027 (72.54%)
+Precision: 0.7280, Recall: 0.7262, F1 Score: 0.7250
+Valid set: Valid Loss: 0.6383
+Classification Accuracy: 238/294 (80.95%)
+Precision: 0.8097, Recall: 0.8083, F1 Score: 0.8075
+Epoch 14
+Train set: Total Loss: 0.7132
+Classification Accuracy: 774/1027 (75.37%)
+Precision: 0.7549, Recall: 0.7534, F1 Score: 0.7528
+Valid set: Valid Loss: 0.6639
+Classification Accuracy: 226/294 (76.87%)
+Precision: 0.7885, Recall: 0.7677, F1 Score: 0.7711
+Epoch 15
+Train set: Total Loss: 0.6563
+Classification Accuracy: 797/1027 (77.60%)
+Precision: 0.7772, Recall: 0.7763, F1 Score: 0.7763
+Valid set: Valid Loss: 0.5770
+Classification Accuracy: 244/294 (82.99%)
+Precision: 0.8355, Recall: 0.8296, F1 Score: 0.8271
+Epoch 16
+Train set: Total Loss: 0.6180
+Classification Accuracy: 804/1027 (78.29%)
+Precision: 0.7841, Recall: 0.7817, F1 Score: 0.7820
+Valid set: Valid Loss: 0.5805
+Classification Accuracy: 235/294 (79.93%)
+Precision: 0.8110, Recall: 0.8002, F1 Score: 0.7982
+Epoch 17
+Train set: Total Loss: 0.5955
+Classification Accuracy: 805/1027 (78.38%)
+Precision: 0.7841, Recall: 0.7838, F1 Score: 0.7836
+Valid set: Valid Loss: 0.5012
+Classification Accuracy: 250/294 (85.03%)
+Precision: 0.8545, Recall: 0.8491, F1 Score: 0.8501
+Epoch 18
+Train set: Total Loss: 0.5404
+Classification Accuracy: 842/1027 (81.99%)
+Precision: 0.8217, Recall: 0.8197, F1 Score: 0.8199
+Valid set: Valid Loss: 0.4698
+Classification Accuracy: 258/294 (87.76%)
+Precision: 0.8805, Recall: 0.8764, F1 Score: 0.8768
+Epoch 19
+Train set: Total Loss: 0.5168
+Classification Accuracy: 847/1027 (82.47%)
+Precision: 0.8273, Recall: 0.8245, F1 Score: 0.8250
+Valid set: Valid Loss: 0.4505
+Classification Accuracy: 251/294 (85.37%)
+Precision: 0.8557, Recall: 0.8540, F1 Score: 0.8538
+Epoch 20
+Train set: Total Loss: 0.4879
+Classification Accuracy: 840/1027 (81.79%)
+Precision: 0.8181, Recall: 0.8181, F1 Score: 0.8179
+Valid set: Valid Loss: 0.4497
+Classification Accuracy: 247/294 (84.01%)
+Precision: 0.8489, Recall: 0.8400, F1 Score: 0.8409
+Epoch 21
+Train set: Total Loss: 0.4684
+Classification Accuracy: 873/1027 (85.00%)
+Precision: 0.8518, Recall: 0.8495, F1 Score: 0.8501
+Valid set: Valid Loss: 0.4338
+Classification Accuracy: 256/294 (87.07%)
+Precision: 0.8789, Recall: 0.8704, F1 Score: 0.8690
+Epoch 22
+Train set: Total Loss: 0.4778
+Classification Accuracy: 866/1027 (84.32%)
+Precision: 0.8437, Recall: 0.8434, F1 Score: 0.8436
+Valid set: Valid Loss: 0.4002
+Classification Accuracy: 255/294 (86.73%)
+Precision: 0.8690, Recall: 0.8676, F1 Score: 0.8664
+Epoch 23
+Train set: Total Loss: 0.4700
+Classification Accuracy: 865/1027 (84.23%)
+Precision: 0.8424, Recall: 0.8420, F1 Score: 0.8421
+Valid set: Valid Loss: 0.3895
+Classification Accuracy: 264/294 (89.80%)
+Precision: 0.8983, Recall: 0.8970, F1 Score: 0.8969
+Epoch 24
+Train set: Total Loss: 0.4326
+Classification Accuracy: 875/1027 (85.20%)
+Precision: 0.8521, Recall: 0.8519, F1 Score: 0.8518
+Valid set: Valid Loss: 0.3822
+Classification Accuracy: 261/294 (88.78%)
+Precision: 0.8889, Recall: 0.8867, F1 Score: 0.8862
+Epoch 25
+Train set: Total Loss: 0.4133
+Classification Accuracy: 884/1027 (86.08%)
+Precision: 0.8618, Recall: 0.8606, F1 Score: 0.8610
+Valid set: Valid Loss: 0.3909
+Classification Accuracy: 260/294 (88.44%)
+Precision: 0.8913, Recall: 0.8840, F1 Score: 0.8841
+Epoch 26
+Train set: Total Loss: 0.4182
+Classification Accuracy: 894/1027 (87.05%)
+Precision: 0.8712, Recall: 0.8706, F1 Score: 0.8707
+Valid set: Valid Loss: 0.3560
+Classification Accuracy: 264/294 (89.80%)
+Precision: 0.8982, Recall: 0.8976, F1 Score: 0.8972
+Epoch 27
+Train set: Total Loss: 0.4002
+Classification Accuracy: 893/1027 (86.95%)
+Precision: 0.8706, Recall: 0.8695, F1 Score: 0.8698
+Valid set: Valid Loss: 0.3509
+Classification Accuracy: 267/294 (90.82%)
+Precision: 0.9090, Recall: 0.9078, F1 Score: 0.9076
+Epoch 28
+Train set: Total Loss: 0.3771
+Classification Accuracy: 900/1027 (87.63%)
+Precision: 0.8770, Recall: 0.8760, F1 Score: 0.8762
+Valid set: Valid Loss: 0.3483
+Classification Accuracy: 264/294 (89.80%)
+Precision: 0.9010, Recall: 0.8981, F1 Score: 0.8984
+Epoch 29
+Train set: Total Loss: 0.3614
+Classification Accuracy: 891/1027 (86.76%)
+Precision: 0.8683, Recall: 0.8675, F1 Score: 0.8677
+Valid set: Valid Loss: 0.3379
+Classification Accuracy: 267/294 (90.82%)
+Precision: 0.9092, Recall: 0.9081, F1 Score: 0.9084
+Epoch 30
+Train set: Total Loss: 0.3432
+Classification Accuracy: 905/1027 (88.12%)
+Precision: 0.8817, Recall: 0.8811, F1 Score: 0.8812
+Valid set: Valid Loss: 0.3333
+Classification Accuracy: 266/294 (90.48%)
+Precision: 0.9084, Recall: 0.9046, F1 Score: 0.9044
+
+Best Model Results (Epoch 27):
+Test loss: 0.3904
+Test accuracy: 85.71%
+Test precision: 0.8658
+Test recall: 0.8578
+Test F1 score: 0.8581
+--------------------------------------------------------------------
