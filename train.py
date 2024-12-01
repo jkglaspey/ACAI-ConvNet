@@ -29,7 +29,7 @@ from torchvision import datasets, transforms
 from torchvision import transforms as T
 
 # Local imports
-from DLAC import conv_model
+from ConvNet import conv_model
 
 
 # -------------------------------------------------------------------------
@@ -692,7 +692,7 @@ def run_main(FLAGS):
     #device = torch.device ("cpu")     # Uncomment this if cuda is taking too long...
     print("Torch device selected: ", device)
     torch.cuda.empty_cache()
-    
+
     # Initialize the model with 5 output classes and send to device
     model = conv_model(FLAGS.num_classes).to(device)
     
@@ -805,8 +805,8 @@ def run_main(FLAGS):
         print(f"Total training duration (hh:mm:ss): {formatted_time}")
  
 if __name__ == '__main__':
-    # Set parameters for Sparse Autoencoder
-    parser = argparse.ArgumentParser('CNN: Aircraft Segmentation.')
+    # Set parameters for classifier
+    parser = argparse.ArgumentParser('CNN: Aircraft Classification.')
     parser.add_argument('--learning_rate',
                         type=float, default=0.0001,
                         help='Initial learning rate.')
