@@ -48,7 +48,7 @@ Evaluation metrics can be found in the "logs" folder after the code has been run
 
 ### **Commands**
 
-Run the following command to isntall required libraries:
+Run the following command to install required libraries:
 
 ```bash
     pip install -r requirements.txt
