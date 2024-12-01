@@ -46,9 +46,13 @@ Evaluation metrics can be found in the "logs" folder after the code has been run
 - Required Python packages: Listed in `requirements.txt` within each model submodule
 - CUDA-enabled GPU (recommended)
 
-### **Setup**
+### **Commands**
 
 Run the following command to get the test results from the report:
+
+```bash
+    python train.py --learning_rate 0.00005 --num_epochs 30 --batch_size 16 --log_dir 'logs' --num_classes 5 --class_weight 1.0
+```
 
 ---
 
